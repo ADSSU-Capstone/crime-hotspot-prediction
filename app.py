@@ -162,7 +162,6 @@ def load_all_data():
 
         try:
             xls = pd.ExcelFile(filepath)
-            sheets_loaded = 0
             rows_loaded = 0
 
             for sheet_name in xls.sheet_names:
@@ -185,9 +184,8 @@ def load_all_data():
                     df['_source_year'] = year_match
 
                     all_frames.append(df)
-                    sheets_loaded += 1
                     rows_loaded += len(df)
-                except Exception as e:
+                except Exception:
                     continue
 
             load_report.append((municipality, os.path.basename(filepath), rows_loaded))
@@ -204,7 +202,7 @@ def load_all_data():
 
 
 # ============================================================
-# PREPROCESSING
+# PREPROCESSING HELPERS
 # ============================================================
 def _extract_hour(val):
     if pd.isna(val):
@@ -250,6 +248,7 @@ def _extract_age(val):
 def preprocess(df):
     df = df.copy()
 
+    # ---------- DATE ----------
     df['date_committed'] = pd.to_datetime(df['date_committed'], errors='coerce')
     df['year'] = df['date_committed'].dt.year
     df['month'] = df['date_committed'].dt.month
@@ -259,6 +258,7 @@ def preprocess(df):
     if '_source_year' in df.columns:
         df['year'] = df['year'].fillna(df['_source_year'])
 
+    # ---------- TIME ----------
     if 'time_committed' in df.columns:
         df['hour'] = df['time_committed'].apply(_extract_hour)
     else:
@@ -274,8 +274,10 @@ def preprocess(df):
         return 'Night'
     df['part_of_day'] = df['hour'].apply(part_of_day)
 
+    # ---------- BARANGAY ----------
     df['barangay'] = df['barangay'].astype(str).str.strip().str.upper()
 
+    # ---------- OFFENSE CATEGORY ----------
     def categorize_offense(o):
         if pd.isna(o):
             return 'Other'
@@ -291,6 +293,7 @@ def preprocess(df):
         return 'Other'
     df['offense_category'] = df['offense'].apply(categorize_offense)
 
+    # ---------- VICTIM / SUSPECT ----------
     if 'victim' in df.columns:
         df['victim_gender'] = df['victim'].apply(_extract_gender)
         df['victim_age'] = df['victim'].apply(_extract_age)
@@ -305,6 +308,7 @@ def preprocess(df):
         df['suspect_gender'] = None
         df['suspect_age'] = np.nan
 
+    # ---------- SEVERITY ----------
     def severity_label(row):
         v = str(row.get('victim', '')).lower()
         if 'killed' in v or 'deceased' in v or 'found dead' in v:
@@ -314,8 +318,17 @@ def preprocess(df):
         return 'Low'
     df['severity'] = df.apply(severity_label, axis=1)
 
+    # ---------- COERCE NUMERIC COLUMNS (handles strings / blanks / n/a) ----------
+    for col in ['latitude', 'longitude', 'victim_age', 'suspect_age']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        else:
+            df[col] = np.nan
+
+    # ---------- DROP INVALID BARANGAY ----------
     df = df.dropna(subset=['barangay'])
     df = df[df['barangay'] != 'NAN']
+    df = df[df['barangay'] != '']
 
     return df
 
@@ -345,16 +358,21 @@ with st.expander("🔍 Data Summary", expanded=False):
     c1.metric("Total Records", f"{len(df):,}")
     c2.metric("Municipalities", df['_source_municipality'].nunique())
     c3.metric("Barangays", df['barangay'].nunique())
-    c4.metric("Years Covered", f"{int(df['year'].min())}–{int(df['year'].max())}" if df['year'].notna().any() else "N/A")
+    c4.metric("Years Covered",
+              f"{int(df['year'].min())}–{int(df['year'].max())}"
+              if df['year'].notna().any() else "N/A")
 
     st.write("**Records per Municipality:**")
-    st.dataframe(df['_source_municipality'].value_counts().rename('Records').to_frame(), use_container_width=True)
+    st.dataframe(df['_source_municipality'].value_counts().rename('Records').to_frame(),
+                 use_container_width=True)
 
     st.write("**Records per Year:**")
-    st.dataframe(df['year'].value_counts().sort_index().rename('Records').to_frame(), use_container_width=True)
+    st.dataframe(df['year'].value_counts().sort_index().rename('Records').to_frame(),
+                 use_container_width=True)
 
     st.write("**Offense Category Distribution:**")
-    st.dataframe(df['offense_category'].value_counts().rename('Count').to_frame(), use_container_width=True)
+    st.dataframe(df['offense_category'].value_counts().rename('Count').to_frame(),
+                 use_container_width=True)
 
 
 # ============================================================
@@ -590,6 +608,7 @@ with tab3:
 
     total = df_f.groupby(['_source_municipality', 'barangay']).size().rename('TOTAL')
 
+    # ---- SAFE geo aggregation (lat/lng already coerced to numeric in preprocess) ----
     geo = df_f.groupby(['_source_municipality', 'barangay']).agg(
         lat=('latitude', 'mean'),
         lng=('longitude', 'mean')
@@ -647,7 +666,7 @@ with tab3:
         with col2:
             st.markdown("**PCA Visualization**")
             fig, ax = plt.subplots(figsize=(6, 4))
-            sc = ax.scatter(X_pca[:,0], X_pca[:,1], c=labels_km, cmap='tab10',
+            sc = ax.scatter(X_pca[:, 0], X_pca[:, 1], c=labels_km, cmap='tab10',
                             s=60, alpha=0.8, edgecolors='black')
             plt.colorbar(sc, label='Cluster')
             ax.set_xlabel("PC1")
@@ -710,7 +729,7 @@ with tab3:
 
         with col2:
             fig, ax = plt.subplots(figsize=(6, 4))
-            sc = ax.scatter(X_pca[:,0], X_pca[:,1], c=labels_db, cmap='tab10',
+            sc = ax.scatter(X_pca[:, 0], X_pca[:, 1], c=labels_db, cmap='tab10',
                             s=60, alpha=0.8, edgecolors='black')
             plt.colorbar(sc, label='Cluster')
             ax.set_xlabel("PC1")
@@ -839,7 +858,7 @@ with tab4:
 
 
 # ------------------------------------------------------------
-# TAB 5: TIME SERIES ARIMA (FULL CORRECT IMPLEMENTATION)
+# TAB 5: TIME SERIES ARIMA
 # ------------------------------------------------------------
 with tab5:
     st.header("📉 Time Series Forecasting (ARIMA)")
@@ -853,7 +872,6 @@ with tab5:
         st.warning(f"Not enough monthly data ({len(monthly)} months) to fit ARIMA. "
                    "Broaden the year range or municipality filter (need at least 18 months).")
     else:
-        # ---------- Historical plot ----------
         st.markdown("### 📊 Historical Monthly Incidents")
         fig, ax = plt.subplots(figsize=(12, 4))
         ax.plot(monthly.index, monthly.values, marker='o', color='#7B241C')
@@ -864,7 +882,7 @@ with tab5:
         st.pyplot(fig)
         plt.close()
 
-        # ---------- Stationarity test ----------
+        # ---------- ADF ----------
         st.markdown("---")
         st.markdown("### 🔬 Stationarity Test (Augmented Dickey-Fuller)")
         try:
@@ -885,7 +903,7 @@ with tab5:
             st.warning(f"ADF test failed: {e}")
             suggested_d = 1
 
-        # ---------- ACF/PACF ----------
+        # ---------- ACF / PACF ----------
         st.markdown("---")
         st.markdown("### 📈 ACF and PACF Plots")
         st.caption("Used to identify p (AR) and q (MA) orders.")
@@ -893,14 +911,14 @@ with tab5:
         try:
             with col1:
                 fig, ax = plt.subplots(figsize=(6, 3))
-                plot_acf(monthly.dropna(), lags=min(20, len(monthly)-1), ax=ax)
+                plot_acf(monthly.dropna(), lags=min(20, len(monthly) - 1), ax=ax)
                 ax.set_title("ACF")
                 plt.tight_layout()
                 st.pyplot(fig)
                 plt.close()
             with col2:
                 fig, ax = plt.subplots(figsize=(6, 3))
-                plot_pacf(monthly.dropna(), lags=min(20, len(monthly)-1), ax=ax, method='ywm')
+                plot_pacf(monthly.dropna(), lags=min(20, len(monthly) - 1), ax=ax, method='ywm')
                 ax.set_title("PACF")
                 plt.tight_layout()
                 st.pyplot(fig)
@@ -915,7 +933,6 @@ with tab5:
         train_size = int(len(monthly) * 0.8)
         train, test = monthly[:train_size], monthly[train_size:]
 
-        # ---------- Auto-select best order ----------
         if arima_auto:
             with st.spinner("Searching for best ARIMA order by AIC (this may take 30–60 seconds)..."):
                 best_aic = np.inf
@@ -936,7 +953,6 @@ with tab5:
 
             st.success(f"✅ Best ARIMA order selected: **ARIMA{best_order}** (AIC = {best_aic:.2f})")
 
-            # Show top 5 candidate orders
             try:
                 top_candidates = pd.DataFrame(results).sort_values('aic').head(5)
                 top_candidates['order'] = top_candidates['order'].apply(lambda x: f"ARIMA{x}")
@@ -954,7 +970,6 @@ with tab5:
                 st.warning(f"Invalid manual order. Using default ARIMA{best_order}.")
             st.info(f"Using manual order: **ARIMA{best_order}**")
 
-        # ---------- Fit final model ----------
         try:
             model = ARIMA(train, order=best_order)
             fitted = model.fit()
@@ -962,21 +977,17 @@ with tab5:
             with st.expander("📋 ARIMA Model Summary"):
                 st.text(str(fitted.summary()))
 
-            # ---------- Forecast on test ----------
             forecast_test = fitted.forecast(steps=len(test))
             forecast_test.index = test.index
 
-            # ---------- Forecast into future ----------
             future_dates = pd.date_range(
                 start=monthly.index[-1] + pd.DateOffset(months=1),
                 periods=arima_forecast_steps, freq='MS'
             )
-            # Refit on full data for best future forecast
             full_model = ARIMA(monthly, order=best_order).fit()
             future_forecast = full_model.forecast(steps=arima_forecast_steps)
             future_forecast.index = future_dates
 
-            # ---------- Metrics ----------
             y_true = test.values
             y_pred = forecast_test.values
             rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
@@ -999,7 +1010,6 @@ with tab5:
             else:
                 st.warning("⚠️ Poor forecasting accuracy (RMSE > 20% of range). Consider a different order.")
 
-            # ---------- Plot ----------
             st.markdown("### 📉 Forecast vs Actual")
             fig, ax = plt.subplots(figsize=(12, 5))
             ax.plot(monthly.index, monthly.values, label='Actual', color='#7B241C',
@@ -1019,7 +1029,6 @@ with tab5:
             st.pyplot(fig)
             plt.close()
 
-            # ---------- Forecast table ----------
             st.markdown("### 📋 Forecast Values")
             forecast_table = pd.DataFrame({
                 'Forecast Month': future_forecast.index.strftime('%Y-%m'),
@@ -1050,7 +1059,7 @@ with tab5:
             cv_actuals = []
 
             min_train = max(12, int(len(monthly) * 0.5))
-            horizon = 1  # predict next month
+            horizon = 1
 
             progress = st.progress(0)
             total_folds = len(monthly) - min_train - horizon + 1
@@ -1089,7 +1098,6 @@ with tab5:
                 st.info(f"Mean CV RMSE is **{cv_rmse_pct:.1f}%** of the data range. "
                         f"Chapter 3 threshold: ≤20% acceptable, ≤10% excellent.")
 
-                # Plot rolling predictions vs actuals
                 cv_index = monthly.index[min_train:min_train + len(cv_preds)]
                 fig, ax = plt.subplots(figsize=(12, 4))
                 ax.plot(cv_index, cv_actuals, label='Actual', color='#7B241C', marker='o', markersize=3)
