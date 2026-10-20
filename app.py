@@ -22,14 +22,14 @@ from mlxtend.preprocessing import TransactionEncoder
 from statsmodels.tsa.arima.model import ARIMA
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 
+# Wide layout is crucial so it fills the screen
 st.set_page_config(page_title="Crime Analytics Dashboard", layout="wide", initial_sidebar_state="expanded")
 
-# Custom styling to match a clean research dashboard
 st.markdown("""
 <style>
     .metric-card {
         background-color: #f8f9fa;
-        padding: 1rem; 
+        padding: 1.2rem; 
         border-radius: 8px; 
         border-left: 5px solid #1f4e79;
         margin-bottom: 1rem;
@@ -38,13 +38,15 @@ st.markdown("""
     .metric-card h2 { margin: 0; color: #1f4e79; font-size: 1.8rem; }
     .interp-box { 
         background-color: #eef2f5; 
-        padding: 10px; 
+        padding: 15px; 
         border-radius: 5px; 
         border-left: 4px solid #2980b9;
-        font-size: 0.95rem;
+        font-size: 1rem;
         margin-top: 10px;
         margin-bottom: 25px;
     }
+    /* Stretch charts to fill container */
+    .stPlotlyChart, .stPyplot { width: 100% !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -58,15 +60,8 @@ MUNICIPALITY_FILES = {
 COLUMN_ALIASES = {
     'barangay': 'barangay', 'date committed': 'date_committed', 'datecommitted': 'date_committed',
     'time committed': 'time_committed', 'timecommitted': 'time_committed',
-    'stages of felony': 'stage_of_felony', 'stageoffelony': 'stage_of_felony',
-    'offense': 'offense', 'offense type': 'offense_type', 'offensetype': 'offense_type',
-    'victims status': 'victim_status', 'victim': 'victim', 'victims age': 'victim_age',
-    'victims gender': 'victim_gender', 'victims occupation': 'victim_occupation',
-    'suspects status': 'suspect_status', 'suspect': 'suspect', 'suspects age': 'suspect_age',
-    'suspects gender': 'suspect_gender', 'suspects occupation': 'suspect_occupation',
-    'latitude': 'latitude', 'longitude': 'longitude', 'lat': 'latitude', 'lng': 'longitude',
-    'municipal': 'municipality', 'province': 'province', 'incident type': 'incident_type',
-    'incidenttype': 'incident_type', 'narrative': 'narrative'
+    'offense': 'offense', 'victim': 'victim', 'suspect': 'suspect',
+    'latitude': 'latitude', 'longitude': 'longitude', 'lat': 'latitude', 'lng': 'longitude'
 }
 
 def _normalize_columns(df):
@@ -152,10 +147,7 @@ def preprocess(df):
         if any(k in s for k in ['reckless imprudence', 'vehicular', 'traffic']): return 'Traffic/Reckless'
         return 'Other'
     
-    if 'offense' in df.columns:
-        df['offense_category'] = df['offense'].apply(categorize_offense)
-    else:
-        df['offense_category'] = 'Other'
+    df['offense_category'] = df['offense'].apply(categorize_offense) if 'offense' in df.columns else 'Other'
 
     def severity_label(row):
         v = str(row.get('victim', '')).lower()
@@ -169,7 +161,7 @@ def preprocess(df):
         
     return df[df['barangay'].notna() & (df['barangay'] != 'NAN') & (df['barangay'] != '')].copy()
 
-# Load and clean
+# Load Data
 df_raw = load_all_data()
 if df_raw is None:
     st.error("Dataset files not found.")
@@ -196,55 +188,61 @@ min_support = st.sidebar.slider("Rule Support", 0.005, 0.20, 0.02, 0.005)
 min_confidence = st.sidebar.slider("Rule Confidence", 0.1, 1.0, 0.4, 0.05)
 arima_steps = st.sidebar.slider("Forecast Horizon", 3, 24, 12)
 
-# Filter data
 df_f = df.copy()
-if len(df_f) < 20:
-    st.warning("Insufficient records for analysis.")
-    st.stop()
 
 # ==========================================
-# PAGE 1: OVERVIEW
+# 1. OVERVIEW
 # ==========================================
 if page == "Overview":
     st.title("Incident Overview")
     
+    # Top Row Metrics
     c1, c2, c3, c4 = st.columns(4)
     c1.markdown(f'<div class="metric-card"><h4>Total Incidents</h4><h2>{len(df_f):,}</h2></div>', unsafe_allow_html=True)
     c2.markdown(f'<div class="metric-card"><h4>Municipalities</h4><h2>{df_f["_source_municipality"].nunique()}</h2></div>', unsafe_allow_html=True)
     c3.markdown(f'<div class="metric-card"><h4>Barangays</h4><h2>{df_f["barangay"].nunique()}</h2></div>', unsafe_allow_html=True)
-    c4.markdown(f'<div class="metric-card"><h4>High Severity</h4><h2>{(df_f["severity"]=="High").sum():,}</h2></div>', unsafe_allow_html=True)
+    c4.markdown(f'<div class="metric-card"><h4>High Severity Cases</h4><h2>{(df_f["severity"]=="High").sum():,}</h2></div>', unsafe_allow_html=True)
     
-    st.markdown("### Crime Distribution")
+    st.markdown("---")
+    
+    # Middle Row Charts
     col1, col2 = st.columns(2)
     with col1:
-        fig, ax = plt.subplots(figsize=(8, 4))
+        st.subheader("Crime Categories")
+        fig, ax = plt.subplots(figsize=(10, 5))
         df_f['offense_category'].value_counts().plot(kind='bar', color='#1f4e79', ax=ax)
         ax.set_ylabel("Number of Cases")
         plt.xticks(rotation=45, ha='right')
         plt.tight_layout()
         st.pyplot(fig)
         plt.close()
-        st.markdown('<div class="interp-box"><b>Interpretation:</b> The dataset is heavily skewed towards crimes against property and persons, which should be the primary focus for law enforcement agencies.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="interp-box"><b>Interpretation:</b> Property and personal crimes dominate the dataset. Law enforcement should prioritize these categories for resource allocation and prevention programs.</div>', unsafe_allow_html=True)
         
     with col2:
-        fig, ax = plt.subplots(figsize=(8, 4))
+        st.subheader("Severity Distribution")
+        fig, ax = plt.subplots(figsize=(10, 5))
         df_f['severity'].value_counts().plot(kind='pie', autopct='%1.1f%%', colors=['#e74c3c', '#f39c12', '#27ae60'], ax=ax)
         ax.set_ylabel("")
         st.pyplot(fig)
         plt.close()
-        st.markdown('<div class="interp-box"><b>Interpretation:</b> While low severity incidents dominate, the presence of high-severity cases indicates a critical need for rapid response protocols.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="interp-box"><b>Interpretation:</b> While low-severity incidents make up the majority, the presence of high-severity cases highlights the need for rapid emergency response capabilities.</div>', unsafe_allow_html=True)
+
+    # Bottom Row: Data Preview to fill space
+    st.markdown("---")
+    st.subheader("Dataset Snapshot")
+    st.dataframe(df_f[['barangay', 'offense_category', 'date_committed', 'part_of_day', 'severity']].head(8), use_container_width=True)
 
 # ==========================================
-# PAGE 2: DATA PREPARATION
+# 2. DATA PREPARATION & EDA
 # ==========================================
 elif page == "Data Preparation":
     st.title("Data Preparation & EDA")
     
-    st.markdown("### Temporal Trends")
     col1, col2 = st.columns(2)
     with col1:
-        fig, ax = plt.subplots(figsize=(8, 4))
-        df_f.groupby('year').size().plot(kind='line', marker='o', color='#1f4e79', ax=ax)
+        st.subheader("Annual Trend")
+        fig, ax = plt.subplots(figsize=(10, 5))
+        df_f.groupby('year').size().plot(kind='line', marker='o', color='#1f4e79', linewidth=2, ax=ax)
         ax.set_ylabel("Incident Count")
         plt.tight_layout()
         st.pyplot(fig)
@@ -252,17 +250,29 @@ elif page == "Data Preparation":
         st.markdown('<div class="interp-box"><b>Interpretation:</b> The annual trend reveals whether crime rates are escalating or stabilizing over the 5-year period.</div>', unsafe_allow_html=True)
         
     with col2:
-        fig, ax = plt.subplots(figsize=(8, 4))
+        st.subheader("Time of Day Analysis")
+        fig, ax = plt.subplots(figsize=(10, 5))
         df_f.groupby('part_of_day').size().plot(kind='bar', color='#2980b9', ax=ax)
         ax.set_ylabel("Incident Count")
         plt.xticks(rotation=0)
         plt.tight_layout()
         st.pyplot(fig)
         plt.close()
-        st.markdown('<div class="interp-box"><b>Interpretation:</b> Identifying the peak time of day allows the PNP to optimize patrol schedules and allocate personnel during high-risk hours.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="interp-box"><b>Interpretation:</b> Identifying peak hours allows the PNP to optimize patrol schedules and allocate personnel during high-risk times.</div>', unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.subheader("Monthly Distribution")
+    fig, ax = plt.subplots(figsize=(12, 4))
+    df_f.groupby('month').size().plot(kind='bar', color='#27ae60', ax=ax)
+    ax.set_xlabel("Month (1 = Jan, 12 = Dec)")
+    ax.set_ylabel("Total Incidents")
+    plt.tight_layout()
+    st.pyplot(fig)
+    plt.close()
+    st.markdown('<div class="interp-box"><b>Interpretation:</b> Seasonal spikes in crime (e.g., during summer or holiday seasons) can be anticipated and mitigated using this monthly breakdown.</div>', unsafe_allow_html=True)
 
 # ==========================================
-# PAGE 3: CLUSTERING EVALUATION
+# 3. CLUSTERING EVALUATION
 # ==========================================
 elif page == "Clustering Evaluation":
     st.title("Clustering Evaluation")
@@ -283,28 +293,27 @@ elif page == "Clustering Evaluation":
         sil_km = silhouette_score(X_scaled, labels_km) if len(set(labels_km)) > 1 else 0
         dbi_km = davies_bouldin_score(X_scaled, labels_km) if len(set(labels_km)) > 1 else 0
         
-        st.markdown("### Model Performance Comparison")
+        st.subheader("Model Performance Comparison")
         
-        # Metrics Table mimicking the image
+        # Wider metrics table
         metrics_data = {
             "Algorithm": ["K-Means Clustering", "DBSCAN Clustering"],
             "Evaluation Metric": ["Silhouette Score", "Davies-Bouldin Index"],
             "Score": [f"{sil_km:.4f}", f"{dbi_km:.4f}"],
-            "Interpretation": [
-                "Higher is better (closer to 1.0)", 
-                "Lower is better (closer to 0.0)"
-            ]
+            "Interpretation": ["Higher is better (max 1.0)", "Lower is better (min 0.0)"]
         }
         st.table(pd.DataFrame(metrics_data))
         
-        st.markdown('<div class="interp-box"><b>Interpretation:</b> The K-Means algorithm successfully partitioned the barangays based on their crime profiles. A Silhouette Score closer to 1.0 and a DBI closer to 0 indicates that the clusters are distinct and well-separated.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="interp-box"><b>Interpretation:</b> The K-Means algorithm successfully partitioned the barangays. A Silhouette Score closer to 1.0 and a DBI closer to 0 indicates that the clusters are distinct and well-separated.</div>', unsafe_allow_html=True)
 
-        # Scatter Plot
+        st.markdown("---")
+        st.subheader("Cluster Visualization (PCA)")
+        
         pca = PCA(n_components=2, random_state=42)
         X_pca = pca.fit_transform(X_scaled)
         
-        fig, ax = plt.subplots(figsize=(10, 5))
-        sc = ax.scatter(X_pca[:, 0], X_pca[:, 1], c=labels_km, cmap='viridis', s=80, edgecolors='k')
+        fig, ax = plt.subplots(figsize=(12, 6))
+        sc = ax.scatter(X_pca[:, 0], X_pca[:, 1], c=labels_km, cmap='viridis', s=100, edgecolors='k')
         plt.colorbar(sc, label='Assigned Cluster')
         ax.set_xlabel("Principal Component 1")
         ax.set_ylabel("Principal Component 2")
@@ -314,12 +323,11 @@ elif page == "Clustering Evaluation":
         st.markdown('<div class="interp-box"><b>Interpretation:</b> The PCA plot visualizes the separation between clusters. Distinct groupings indicate that barangays within the same cluster share similar crime dynamics.</div>', unsafe_allow_html=True)
 
 # ==========================================
-# PAGE 4: HOTSPOT FACTORS
+# 4. HOTSPOT FACTORS
 # ==========================================
 elif page == "Hotspot Factors":
     st.title("Hotspot Factor Analysis")
     
-    # Replicate clustering to get labels
     offense_pivot = df_f.pivot_table(index=['_source_municipality', 'barangay'], columns='offense_category', values='offense', aggfunc='count', fill_value=0)
     time_pivot = df_f.pivot_table(index=['_source_municipality', 'barangay'], columns='part_of_day', values='offense', aggfunc='count', fill_value=0)
     sev_pivot = df_f.pivot_table(index=['_source_municipality', 'barangay'], columns='severity', values='offense', aggfunc='count', fill_value=0)
@@ -328,35 +336,33 @@ elif page == "Hotspot Factors":
     features = pd.concat([offense_pivot, time_pivot, sev_pivot, total], axis=1).fillna(0)
     features = features[features['TOTAL'] > 0]
     X_scaled = StandardScaler().fit_transform(features.drop(columns=['TOTAL'], errors='ignore'))
-    kmeans = KMeans(n_clusters=st.session_state.get('k_clusters', 4), random_state=42, n_init=10)
+    kmeans = KMeans(n_clusters=k_clusters, random_state=42, n_init=10)
     labels_km = kmeans.fit_predict(X_scaled)
-    
     features['Cluster'] = labels_km
     
     st.subheader("Top Barangays by Incident Count")
     
-    # This horizontal bar chart mimics the "Significant Factors Chart" in the image
     top_brgy = features.sort_values('TOTAL', ascending=False).head(15)
     top_brgy.index = [f"{m} - {b}" for m, b in top_brgy.index]
     
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(12, 6))
     top_brgy.sort_values('TOTAL').plot(kind='barh', y='TOTAL', color='#1f4e79', ax=ax)
     ax.set_xlabel("Total Incidents")
     ax.set_ylabel("")
     plt.tight_layout()
     st.pyplot(fig)
     plt.close()
+    st.markdown('<div class="interp-box"><b>Interpretation:</b> The chart ranks the most critical hotspots. Barangays at the top require immediate resource allocation.</div>', unsafe_allow_html=True)
     
-    st.markdown('<div class="interp-box"><b>Interpretation:</b> The chart ranks the most critical hotspots. Barangays at the top of this list require immediate resource allocation and targeted intervention strategies.</div>', unsafe_allow_html=True)
-    
+    st.markdown("---")
     st.subheader("Cluster Profiles (Mean Values)")
-    st.markdown("This table shows the average characteristics of each cluster. It helps identify what makes a 'high-risk' cluster distinct from a 'low-risk' one.")
+    
     profile = features.groupby('Cluster').mean(numeric_only=True).round(2)
     st.dataframe(profile, use_container_width=True)
-    st.markdown('<div class="interp-box"><b>Interpretation:</b> By comparing the means, we can see that certain clusters are heavily driven by specific crime categories (e.g., high property crimes) or temporal factors (e.g., occurring mostly at night).</div>', unsafe_allow_html=True)
+    st.markdown('<div class="interp-box"><b>Interpretation:</b> By comparing the means, we can see that certain clusters are heavily driven by specific crime categories or temporal factors. This dictates what kind of intervention each cluster needs.</div>', unsafe_allow_html=True)
 
 # ==========================================
-# PAGE 5: ASSOCIATION RULES
+# 5. ASSOCIATION RULES
 # ==========================================
 elif page == "Association Rules":
     st.title("Significant Association Rules")
@@ -391,19 +397,18 @@ elif page == "Association Rules":
             disp['antecedents'] = disp['antecedents'].apply(lambda x: ', '.join(sorted(x)))
             disp['consequents'] = disp['consequents'].apply(lambda x: ', '.join(sorted(x)))
             
-            # Clean table similar to the image
             display_table = disp[['antecedents', 'consequents', 'support', 'confidence', 'lift']].round(4)
             display_table.columns = ['If (Antecedent)', 'Then (Consequent)', 'Support', 'Confidence', 'Lift']
             st.dataframe(display_table, use_container_width=True)
             
-            st.markdown('<div class="interp-box"><b>Interpretation:</b> These rules highlight hidden patterns. For example, a high Confidence and Lift > 1 indicates that if a crime happens at a specific time or place, it is highly likely to be a specific type of offense (e.g., Theft at Night in Poblacion).</div>', unsafe_allow_html=True)
+            st.markdown('<div class="interp-box"><b>Interpretation:</b> These rules highlight hidden patterns. A high Confidence and Lift > 1 indicates that if a crime happens under specific conditions, it is highly likely to be a specific type of offense.</div>', unsafe_allow_html=True)
             
-            # Feature Importance Bar Chart (Mimicking the Factor Analysis Chart)
+            st.markdown("---")
             st.subheader("Top Rules by Lift")
-            top_lift = disp.head(5).copy()
+            top_lift = disp.head(7).copy()
             top_lift['Rule'] = top_lift['antecedents'] + " -> " + top_lift['consequents']
             
-            fig, ax = plt.subplots(figsize=(10, 4))
+            fig, ax = plt.subplots(figsize=(12, 5))
             top_lift.sort_values('lift').plot(kind='barh', x='Rule', y='lift', color='#2980b9', ax=ax, legend=False)
             ax.set_xlabel("Lift Score")
             ax.set_ylabel("")
@@ -412,10 +417,10 @@ elif page == "Association Rules":
             plt.close()
             st.markdown('<div class="interp-box"><b>Interpretation:</b> A higher Lift score means the rule is more meaningful. The top rules represent the strongest co-occurrences in the crime dataset.</div>', unsafe_allow_html=True)
         else:
-            st.info("No frequent itemsets found with current support threshold.")
+            st.info("No frequent itemsets found.")
 
 # ==========================================
-# PAGE 6: TIME SERIES FORECASTING
+# 6. TIME SERIES FORECASTING
 # ==========================================
 elif page == "Time Series Forecasting":
     st.title("Time Series Forecasting")
@@ -448,27 +453,30 @@ elif page == "Time Series Forecasting":
             mae = mean_absolute_error(test.values, forecast_test.values)
             mape = np.mean(np.abs((test.values - forecast_test.values) / np.maximum(test.values, 1))) * 100
             
-            st.markdown("### Model Evaluation")
+            st.subheader("Model Evaluation")
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Model Used", f"ARIMA{best_order}")
             c2.metric("RMSE", f"{rmse:.2f}")
             c3.metric("MAE", f"{mae:.2f}")
             c4.metric("MAPE", f"{mape:.1f}%")
             
-            st.markdown('<div class="interp-box"><b>Interpretation:</b> The ARIMA model demonstrates acceptable predictive accuracy. A low RMSE indicates that the model fits the historical data well and can reliably project future incident volume.</div>', unsafe_allow_html=True)
+            st.markdown('<div class="interp-box"><b>Interpretation:</b> The ARIMA model demonstrates acceptable predictive accuracy. A low RMSE indicates that the model fits the historical data well.</div>', unsafe_allow_html=True)
             
-            fig, ax = plt.subplots(figsize=(10, 4))
-            ax.plot(monthly.index, monthly.values, label='Actual Historical', color='#1f4e79', marker='o', markersize=3)
+            st.markdown("---")
+            st.subheader("Forecast Visualization")
+            
+            fig, ax = plt.subplots(figsize=(12, 5))
+            ax.plot(monthly.index, monthly.values, label='Actual Historical', color='#1f4e79', marker='o', markersize=4)
             ax.plot(test.index, forecast_test.values, label='Test Forecast', color='#e74c3c', linestyle='--')
             ax.plot(future_forecast.index, future_forecast.values, label='Future Forecast', color='#27ae60', linestyle='--', marker='s')
             ax.legend()
             plt.tight_layout()
             st.pyplot(fig)
             plt.close()
+            st.markdown('<div class="interp-box"><b>Interpretation:</b> The projected numbers allow the LGU and PNP to proactively allocate budgets and resources for the upcoming months.</div>', unsafe_allow_html=True)
             
             st.subheader("Forecasted Incident Volume")
             st.dataframe(pd.DataFrame({'Month': future_forecast.index.strftime('%Y-%m'), 'Predicted Incidents': np.maximum(future_forecast.values, 0).round(2)}), use_container_width=True)
-            st.markdown('<div class="interp-box"><b>Interpretation:</b> The projected numbers allow the LGU and PNP to proactively allocate budgets and resources for the upcoming months.</div>', unsafe_allow_html=True)
             
         else:
             st.warning(f"Not enough monthly data to fit ARIMA. Currently have {len(monthly)} months.")
