@@ -1,2 +1,0 @@
-# crime-hotspot-prediction
-Dashboard
